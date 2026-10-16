@@ -1,40 +1,167 @@
-"""
-Schemas Pydantic v2 para validación de request/response de la API.
-Requiere pydantic>=2.14 (tiene wheel para Python 3.14).
-"""
+"""Modelos Pydantic v2 para los 21 stored procedures de la API."""
 
-from pydantic import BaseModel, Field
-from typing import Optional, List
 from datetime import datetime
+from pydantic import BaseModel, ConfigDict, Field
 
 
-# ── Prueba 1: POST /vehiculos/{id_vehiculo}/comando ────────────────────────────
+class InputModel(BaseModel):
+    """Configuración común para cuerpos de entrada de la API."""
 
-class ComandoEnviar(BaseModel):
-    """Body para POST /vehiculos/{id_vehiculo}/comando"""
-    id_comando: int   = Field(..., description="ID del comando a ejecutar")
-    conectado:  bool  = Field(True, description="Estado de conexión del vehículo")
-    origen:     str   = Field("api", description="Origen: 'api', 'ws', 'manual'")
+    model_config = ConfigDict(extra="forbid")
 
 
-class ComandoResponse(BaseModel):
-    """Respuesta exitosa al enviar un comando."""
-    message:     str
+class OutputModel(BaseModel):
+    """Conserva columnas adicionales devueltas por los stored procedures."""
+
+    model_config = ConfigDict(from_attributes=True, extra="allow")
+
+
+# ── Vehículos ─────────────────────────────────────────────────────────────────
+
+class VehiculoCreate(InputModel):
+    nombre: str = Field(..., min_length=1, max_length=100)
+    modelo: str = Field(..., min_length=1, max_length=100)
+    descripcion: str = Field(..., min_length=1, max_length=500)
+    microcontrolador: str = Field(..., min_length=1, max_length=100)
+
+
+class VehiculoUpdate(InputModel):
+    nombre: str = Field(..., min_length=1, max_length=100)
+    modelo: str = Field(..., min_length=1, max_length=100)
+    descripcion: str = Field(..., min_length=1, max_length=500)
+    microcontrolador: str = Field(..., min_length=1, max_length=100)
+    activo: bool
+
+
+class VehiculoResponse(OutputModel):
+    id_vehiculo: int | None = None
+    nombre: str | None = None
+    modelo: str | None = None
+    descripcion: str | None = None
+    microcontrolador: str | None = None
+    activo: bool | None = None
+
+
+# ── Comandos ──────────────────────────────────────────────────────────────────
+
+class ComandoCreate(InputModel):
+    id_vehiculo: int = Field(..., gt=0)
+    nombre: str = Field(..., min_length=1, max_length=100)
+    codigo: int = Field(..., ge=0, le=65535)
+    descripcion: str = Field(..., min_length=1, max_length=500)
+
+
+class ComandoUpdate(InputModel):
+    nombre: str = Field(..., min_length=1, max_length=100)
+    codigo: int = Field(..., ge=0, le=65535)
+    descripcion: str = Field(..., min_length=1, max_length=500)
+    activo: bool
+
+
+class ComandoResponse(OutputModel):
+    id_comando: int | None = None
+    id_vehiculo: int | None = None
+    nombre: str | None = None
+    codigo: int | None = None
+    descripcion: str | None = None
+    activo: bool | None = None
+
+
+class ComandoCreadoResponse(OutputModel):
+    message: str
+    id_comando: int
+
+
+# ── Estado ────────────────────────────────────────────────────────────────────
+
+class EstadoUpdate(InputModel):
+    id_comando: int = Field(..., gt=0)
+    conectado: bool
+
+
+class EstadoResponse(OutputModel):
+    id_vehiculo: int | None = None
+    id_comando: int | None = None
+    conectado: bool | None = None
+    fecha_hora: datetime | None = None
+
+
+# ── Historial / Pruebas 1 y 2 ──────────────────────────────────────────────────
+
+class ComandoEnviar(InputModel):
+    """Body de POST /vehiculos/{id_vehiculo}/comando."""
+
+    id_comando: int = Field(..., gt=0, description="ID del comando a ejecutar")
+    conectado: bool = Field(..., description="Estado de conexión del vehículo")
+    origen: str = Field("MANUAL", min_length=1, max_length=30, description="Origen del movimiento")
+
+
+class ComandoResponseMovimiento(OutputModel):
+    message: str
     id_vehiculo: int
-    id_comando:  int
-    conectado:   bool
-    origen:      str
+    id_comando: int
+    conectado: bool
+    origen: str
 
 
-# ── Prueba 2: GET /vehiculos/{id_vehiculo}/historial ───────────────────────────
+class HistorialItem(OutputModel):
+    id_historial: int | None = None
+    id_vehiculo: int | None = None
+    comando: str | None = None
+    codigo: int | None = None
+    id_comando: int | None = None
+    fecha_hora: datetime | None = None
+    origen: str | None = None
 
-class HistorialItem(BaseModel):
-    """Un registro del historial de comandos."""
-    id_historial: int
-    id_vehiculo:  int
-    comando:      Optional[str] = None
-    codigo:       Optional[int] = None
-    fecha_hora:   datetime
-    origen:       Optional[str] = None
 
-    model_config = {"from_attributes": True}
+# ── Demos ─────────────────────────────────────────────────────────────────────
+
+class DemoCreate(InputModel):
+    id_vehiculo: int = Field(..., gt=0)
+    nombre: str = Field(..., min_length=1, max_length=100)
+    descripcion: str = Field(..., min_length=1, max_length=500)
+
+
+class DemoUpdate(InputModel):
+    nombre: str = Field(..., min_length=1, max_length=100)
+    descripcion: str = Field(..., min_length=1, max_length=500)
+    activo: bool
+
+
+class DemoResponse(OutputModel):
+    id_demo: int | None = None
+    id_vehiculo: int | None = None
+    nombre: str | None = None
+    descripcion: str | None = None
+    activo: bool | None = None
+
+
+class DemoMovimientoCreate(InputModel):
+    id_demo: int = Field(..., gt=0)
+    id_comando: int = Field(..., gt=0)
+    orden: int = Field(..., ge=1)
+    duracion_ms: int = Field(..., ge=0, le=86_400_000)
+    pausa_ms: int = Field(..., ge=0, le=86_400_000)
+
+
+class DemoMovimientoUpdate(InputModel):
+    id_comando: int = Field(..., gt=0)
+    orden: int = Field(..., ge=1)
+    duracion_ms: int = Field(..., ge=0, le=86_400_000)
+    pausa_ms: int = Field(..., ge=0, le=86_400_000)
+
+
+class DemoMovimientoResponse(OutputModel):
+    id_demo_movimiento: int | None = None
+    id_demo: int | None = None
+    orden: int | None = None
+    id_comando: int | None = None
+    comando: str | None = None
+    codigo: int | None = None
+    duracion_ms: int | None = None
+    pausa_ms: int | None = None
+
+
+class OperationResponse(OutputModel):
+    message: str
+    id: int | None = None

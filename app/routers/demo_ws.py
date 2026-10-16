@@ -1,17 +1,8 @@
-"""
-WebSocket endpoint — Prueba 3: Ejecutar una DEMO sin registrar historial.
+"""WebSocket de reproducción paso a paso de demos.
 
-Flujo:
-  1. Cliente conecta a  WS /ws/demo
-  2. Cliente envía JSON: {"action": "start", "id_demo": <int>}
-  3. Servidor carga los movimientos con sp_obtener_movimientos_demo
-  4. Emite evento "demo_start" con el total de pasos
-  5. Por cada movimiento emite "movimiento" y espera duracion_ms + pausa_ms
-  6. Al terminar emite "done"
-  7. Cliente puede enviar {"action": "stop"} en cualquier momento
-
-⚠️  IMPORTANTE: esta demo NO llama a sp_registrar_historial ni a
-    sp_actualizar_estado, por lo que historial_comandos no se modifica.
+Cada movimiento actualiza el estado actual mediante ``sp_actualizar_estado``;
+deliberadamente no se llama a ``sp_registrar_historial``. Así la demo deja el
+último comando en ``estado_vehiculo`` sin contaminar ``historial_comandos``.
 """
 
 import asyncio
@@ -19,10 +10,12 @@ import json
 import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from app.database import call_procedure
+from app.services import DemoService, StateService
 
 router = APIRouter(tags=["WebSocket Demo"])
 logger = logging.getLogger(__name__)
+demo_service = DemoService()
+state_service = StateService()
 
 # Flag por conexión para cancelar la demo en curso
 _stop_flags: dict[int, bool] = {}
@@ -34,7 +27,7 @@ async def websocket_demo(websocket: WebSocket):
     WebSocket que ejecuta una demo paso a paso.
 
     No registra historial — la prueba 3 verifica explícitamente que
-    historial_comandos permanece sin cambios durante la ejecución.
+    ``historial_comandos`` permanece sin cambios durante la ejecución.
     """
     await websocket.accept()
     conn_id = id(websocket)
@@ -51,6 +44,13 @@ async def websocket_demo(websocket: WebSocket):
                 await websocket.send_json({"event": "error", "detail": "JSON inválido"})
                 continue
 
+            if not isinstance(msg, dict):
+                await websocket.send_json({
+                    "event": "error",
+                    "detail": "El mensaje debe ser un objeto JSON",
+                })
+                continue
+
             action = msg.get("action", "")
 
             # ── STOP ──────────────────────────────────────────────────────────
@@ -62,13 +62,14 @@ async def websocket_demo(websocket: WebSocket):
             # ── START ─────────────────────────────────────────────────────────
             if action == "start":
                 id_demo = msg.get("id_demo")
-                if not id_demo:
+                if not isinstance(id_demo, int) or id_demo <= 0:
                     await websocket.send_json({"event": "error", "detail": "Falta id_demo"})
                     continue
 
-                # Cargar movimientos desde BD (sin historial)
+                # La llamada al driver es bloqueante; no debe detener el
+                # event loop que atiende otras conexiones WebSocket.
                 try:
-                    movimientos = call_procedure("sp_obtener_movimientos_demo", (id_demo,))
+                    movimientos = await asyncio.to_thread(demo_service.list_movements, id_demo)
                 except Exception as exc:
                     await websocket.send_json({"event": "error", "detail": str(exc)})
                     continue
@@ -79,6 +80,21 @@ async def websocket_demo(websocket: WebSocket):
                     )
                     continue
 
+                # El SP puede devolver id_vehiculo mediante el JOIN con demos;
+                # también se acepta en el mensaje para instalaciones antiguas.
+                id_vehiculo = (
+                    msg.get("id_vehiculo")
+                    or movimientos[0].get("id_vehiculo")
+                    or movimientos[0].get("vehiculo_id")
+                )
+                if not isinstance(id_vehiculo, int) or id_vehiculo <= 0:
+                    await websocket.send_json({
+                        "event": "error",
+                        "detail": "Falta id_vehiculo para actualizar el estado",
+                    })
+                    continue
+
+                movimientos = sorted(movimientos, key=lambda item: item["orden"])
                 total = len(movimientos)
                 _stop_flags[conn_id] = False
 
@@ -93,19 +109,29 @@ async def websocket_demo(websocket: WebSocket):
                         await websocket.send_json({"event": "stopped"})
                         break
 
-                    await websocket.send_json(
-                        {
-                            "event":       "movimiento",
-                            "paso":        idx,
-                            "total":       total,
-                            "orden":       mov["orden"],
-                            "id_comando":  mov["id_comando"],
-                            "comando":     mov["comando"],
-                            "codigo":      mov["codigo"],
-                            "duracion_ms": mov["duracion_ms"],
-                            "pausa_ms":    mov["pausa_ms"],
-                        }
-                    )
+                    try:
+                        # Prueba 3: actualizar estado sin insertar historial.
+                        await asyncio.to_thread(
+                            state_service.update,
+                            id_vehiculo,
+                            mov["id_comando"],
+                            True,
+                        )
+                    except Exception as exc:
+                        await websocket.send_json({"event": "error", "detail": str(exc)})
+                        break
+
+                    await websocket.send_json({
+                        "event": "movimiento",
+                        "paso": idx,
+                        "total": total,
+                        "orden": mov["orden"],
+                        "id_comando": mov["id_comando"],
+                        "comando": mov["comando"],
+                        "codigo": mov["codigo"],
+                        "duracion_ms": mov["duracion_ms"],
+                        "pausa_ms": mov["pausa_ms"],
+                    })
 
                     # Respetar tiempos definidos en la demo
                     await asyncio.sleep(mov["duracion_ms"] / 1000)

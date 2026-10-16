@@ -1,35 +1,30 @@
-"""
-Router REST para las Pruebas 1 y 2.
+"""Endpoints de las Pruebas Funcionales 1 y 2."""
 
-Prueba 1 — POST /vehiculos/{id_vehiculo}/comando
-    Registra un movimiento individual:
-      · sp_actualizar_estado  → actualiza/inserta en estado_vehiculo
-      · sp_registrar_historial → inserta en historial_comandos
-
-Prueba 2 — GET /vehiculos/{id_vehiculo}/historial
-    Retorna los últimos 10 movimientos del vehículo:
-      · sp_obtener_historial retorna todos ordenados DESC
-      · Se recortan a 10 en Python (el SP no tiene LIMIT)
-"""
-
-from typing import List
 from fastapi import APIRouter, HTTPException, Path
-from app.database import call_procedure
-from app.schemas import ComandoEnviar, ComandoResponse, HistorialItem
+
+from app.schemas import ComandoEnviar, ComandoResponseMovimiento, HistorialItem
+from app.services import HistoryService
 
 router = APIRouter(prefix="/vehiculos", tags=["Vehículos"])
+service = HistoryService()
+
+
+def _db_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, HTTPException):
+        return exc
+    return HTTPException(status_code=500, detail=f"Error de base de datos: {exc}")
 
 
 # ── Prueba 1: POST /vehiculos/{id_vehiculo}/comando ────────────────────────────
 
 @router.post(
     "/{id_vehiculo}/comando",
-    response_model=ComandoResponse,
+    response_model=ComandoResponseMovimiento,
     status_code=201,
     summary="[Prueba 1] Registrar movimiento individual en estado e historial",
 )
 def enviar_comando(
-    id_vehiculo: int = Path(..., description="ID del vehículo"),
+    id_vehiculo: int = Path(..., gt=0, description="ID del vehículo"),
     body: ComandoEnviar = ...,
 ):
     """
@@ -39,23 +34,18 @@ def enviar_comando(
        (INSERT … ON DUPLICATE KEY UPDATE).
     2. **sp_registrar_historial** — inserta un nuevo registro en `historial_comandos`.
 
-    Ambas son atómicas desde el punto de vista del cliente: si cualquiera falla
-    se devuelve HTTP 500.
+    Las dos llamadas se ejecutan en una única transacción MySQL. Si cualquiera
+    falla, el estado y el historial se revierten juntos.
     """
     try:
-        # 1. Actualizar estado actual del vehículo
-        call_procedure(
-            "sp_actualizar_estado",
-            (id_vehiculo, body.id_comando, body.conectado),
+        service.send_command_transactionally(
+            id_vehiculo,
+            body.id_comando,
+            body.conectado,
+            body.origen,
         )
 
-        # 2. Registrar en historial
-        call_procedure(
-            "sp_registrar_historial",
-            (id_vehiculo, body.id_comando, body.origen),
-        )
-
-        return ComandoResponse(
+        return ComandoResponseMovimiento(
             message="Comando registrado correctamente",
             id_vehiculo=id_vehiculo,
             id_comando=body.id_comando,
@@ -63,18 +53,18 @@ def enviar_comando(
             origen=body.origen,
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise _db_error(exc) from exc
 
 
 # ── Prueba 2: GET /vehiculos/{id_vehiculo}/historial ──────────────────────────
 
 @router.get(
     "/{id_vehiculo}/historial",
-    response_model=List[HistorialItem],
+    response_model=list[HistorialItem],
     summary="[Prueba 2] Últimos 10 movimientos del vehículo",
 )
 def obtener_historial(
-    id_vehiculo: int = Path(..., description="ID del vehículo"),
+    id_vehiculo: int = Path(..., gt=0, description="ID del vehículo"),
 ):
     """
     Retorna los **últimos 10 movimientos** registrados para el vehículo.
@@ -84,8 +74,6 @@ def obtener_historial(
     stored procedure no incluye LIMIT.
     """
     try:
-        rows = call_procedure("sp_obtener_historial", (id_vehiculo,))
-        # sp_obtener_historial ya ordena DESC; tomamos los primeros 10
-        return rows[:10]
+        return service.list(id_vehiculo, limit=10)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise _db_error(exc) from exc
