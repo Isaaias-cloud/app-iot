@@ -1,7 +1,11 @@
 """Endpoints de las Pruebas Funcionales 1 y 2."""
 
+import asyncio
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, HTTPException, Path
 
+from app.routers.demo_ws import manager
 from app.schemas import ComandoEnviar, ComandoResponseMovimiento, HistorialItem
 from app.services import HistoryService
 
@@ -23,7 +27,7 @@ def _db_error(exc: Exception) -> HTTPException:
     status_code=201,
     summary="[Prueba 1] Registrar movimiento individual en estado e historial",
 )
-def enviar_comando(
+async def enviar_comando(
     id_vehiculo: int = Path(..., gt=0, description="ID del vehículo"),
     body: ComandoEnviar = ...,
 ):
@@ -38,12 +42,23 @@ def enviar_comando(
     falla, el estado y el historial se revierten juntos.
     """
     try:
-        service.send_command_transactionally(
+        await asyncio.to_thread(
+            service.send_command_transactionally,
             id_vehiculo,
             body.id_comando,
             body.conectado,
             body.origen,
         )
+
+        evento_ws = {
+            "event": "nuevo_movimiento",
+            "id_vehiculo": id_vehiculo,
+            "id_comando": body.id_comando,
+            "conectado": body.conectado,
+            "origen": body.origen,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        await manager.broadcast_to_vehicle(id_vehiculo, evento_ws)
 
         return ComandoResponseMovimiento(
             message="Comando registrado correctamente",

@@ -8,6 +8,7 @@ deliberadamente no se llama a ``sp_registrar_historial``. Así la demo deja el
 import asyncio
 import json
 import logging
+from typing import Dict, List
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.services import DemoService, StateService
@@ -17,8 +18,66 @@ logger = logging.getLogger(__name__)
 demo_service = DemoService()
 state_service = StateService()
 
+
+class ConnectionManager:
+    """Mantiene las conexiones WebSocket agrupadas por vehículo."""
+
+    def __init__(self) -> None:
+        self.active_connections: Dict[int, List[WebSocket]] = {}
+
+    async def connect(self, id_vehiculo: int, websocket: WebSocket) -> None:
+        await websocket.accept()
+        self.active_connections.setdefault(id_vehiculo, []).append(websocket)
+
+    def disconnect(self, id_vehiculo: int, websocket: WebSocket) -> None:
+        connections = self.active_connections.get(id_vehiculo)
+        if connections is None:
+            return
+
+        try:
+            connections.remove(websocket)
+        except ValueError:
+            return
+
+        if not connections:
+            self.active_connections.pop(id_vehiculo, None)
+
+    async def broadcast_to_vehicle(self, id_vehiculo: int, message: dict) -> None:
+        """Envía el mensaje a los clientes del vehículo y limpia los caídos."""
+        for websocket in list(self.active_connections.get(id_vehiculo, [])):
+            try:
+                await websocket.send_json(message)
+            except Exception:
+                self.disconnect(id_vehiculo, websocket)
+
+
+manager = ConnectionManager()
+
 # Flag por conexión para cancelar la demo en curso
 _stop_flags: dict[int, bool] = {}
+
+
+@router.websocket("/ws/vehiculo/{id_vehiculo}")
+async def websocket_vehiculo(websocket: WebSocket, id_vehiculo: int):
+    """Monitorea los cambios de estado de un vehículo en tiempo real."""
+    await manager.connect(id_vehiculo, websocket)
+    try:
+        try:
+            rows = await asyncio.to_thread(state_service.get, id_vehiculo)
+            await websocket.send_json({
+                "event": "estado_actual",
+                "id_vehiculo": id_vehiculo,
+                "estado": rows[0],
+            })
+        except Exception as exc:
+            await websocket.send_json({"event": "error", "detail": str(exc)})
+
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        logger.info("WS vehículo desconectado id_vehiculo=%s", id_vehiculo)
+    finally:
+        manager.disconnect(id_vehiculo, websocket)
 
 
 @router.websocket("/ws/demo")
