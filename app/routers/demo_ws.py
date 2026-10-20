@@ -12,6 +12,7 @@ from typing import Dict, List
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.services import DemoService, StateService
+from fastapi.encoders import jsonable_encoder
 
 router = APIRouter(tags=["WebSocket Demo"])
 logger = logging.getLogger(__name__)
@@ -67,7 +68,7 @@ async def websocket_vehiculo(websocket: WebSocket, id_vehiculo: int):
             await websocket.send_json({
                 "event": "estado_actual",
                 "id_vehiculo": id_vehiculo,
-                "estado": rows[0],
+                "estado": jsonable_encoder(rows[0]),
             })
         except Exception as exc:
             await websocket.send_json({"event": "error", "detail": str(exc)})

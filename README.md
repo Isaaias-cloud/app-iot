@@ -12,6 +12,13 @@ existentes; no se modifican sus nombres ni las tablas de `vehiculo_iot`.
 - Base de datos `vehiculo_iot` (o el nombre configurado) con las tablas y los
   21 stored procedures de la práctica.
 
+## URL del Swagger UI
+- https://api-iot-26.duckdns.org/docs
+- http://3.223.103.55:8000/docs
+
+## Dirección pública del web socket
+- wss://api-iot-26.duckdns.org/ws/vehiculo/1
+
 ## Configuración y ejecución local
 
 ```powershell
