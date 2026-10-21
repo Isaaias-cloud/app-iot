@@ -4,7 +4,9 @@ from fastapi import APIRouter, HTTPException, Path, status
 
 from app.schemas import (
     DemoCreate,
+    DemoCreateResponse,
     DemoMovimientoCreate,
+    DemoMovimientoCreateResponse,
     DemoMovimientoResponse,
     DemoMovimientoUpdate,
     DemoResponse,
@@ -24,11 +26,21 @@ def _db_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=500, detail=f"Error de base de datos: {exc}")
 
 
-@router.post("/", response_model=DemoResponse, status_code=status.HTTP_201_CREATED, summary="Crear demo")
-def crear_demo(body: DemoCreate):
+@router.post(
+    "/",
+    response_model=DemoCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crear demo",
+)
+def crear_demo(body: DemoCreate) -> DemoCreateResponse:
     try:
         rows = service.create(body.id_vehiculo, body.nombre, body.descripcion)
-        return rows[0] if rows else body.model_dump()
+        if not rows or rows[0].get("id_demo") is None:
+            raise HTTPException(
+                status_code=500,
+                detail="sp_crear_demo no devolvió id_demo",
+            )
+        return rows[0]
     except Exception as exc:
         raise _db_error(exc) from exc
 
@@ -61,20 +73,22 @@ def eliminar_demo(id_demo: int = Path(..., gt=0)):
 
 @router.post(
     "/movimiento",
-    response_model=DemoMovimientoResponse,
+    response_model=DemoMovimientoCreateResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Agregar movimiento a una demo",
 )
-def agregar_movimiento_demo(body: DemoMovimientoCreate):
+def agregar_movimiento_demo(body: DemoMovimientoCreate) -> DemoMovimientoCreateResponse:
     try:
-        rows = service.add_movement(
+        service.add_movement(
             body.id_demo,
             body.id_comando,
             body.orden,
             body.duracion_ms,
             body.pausa_ms,
         )
-        return rows[0] if rows else body.model_dump()
+        return DemoMovimientoCreateResponse(
+            message="Movimiento agregado correctamente"
+        )
     except Exception as exc:
         raise _db_error(exc) from exc
 
@@ -85,6 +99,7 @@ router.add_api_route(
     "/movimientos",
     agregar_movimiento_demo,
     methods=["POST"],
+    response_model=DemoMovimientoCreateResponse,
     include_in_schema=False,
 )
 

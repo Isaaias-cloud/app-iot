@@ -2,7 +2,13 @@
 
 from fastapi import APIRouter, HTTPException, Path, status
 
-from app.schemas import OperationResponse, VehiculoCreate, VehiculoResponse, VehiculoUpdate
+from app.schemas import (
+    OperationResponse,
+    VehiculoCreate,
+    VehiculoCreateResponse,
+    VehiculoResponse,
+    VehiculoUpdate,
+)
 from app.services import VehicleService
 
 
@@ -16,8 +22,13 @@ def _db_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=500, detail=f"Error de base de datos: {exc}")
 
 
-@router.post("/", response_model=VehiculoResponse, status_code=status.HTTP_201_CREATED, summary="Crear vehículo")
-def crear_vehiculo(body: VehiculoCreate):
+@router.post(
+    "/",
+    response_model=VehiculoCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crear vehículo",
+)
+def crear_vehiculo(body: VehiculoCreate) -> VehiculoCreateResponse:
     try:
         rows = service.create(
             body.nombre,
@@ -25,7 +36,12 @@ def crear_vehiculo(body: VehiculoCreate):
             body.descripcion,
             body.microcontrolador,
         )
-        return rows[0] if rows else body.model_dump()
+        if not rows or rows[0].get("id_vehiculo") is None:
+            raise HTTPException(
+                status_code=500,
+                detail="sp_crear_vehiculo no devolvió id_vehiculo",
+            )
+        return rows[0]
     except Exception as exc:
         raise _db_error(exc) from exc
 

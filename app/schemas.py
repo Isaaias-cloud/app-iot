@@ -42,6 +42,12 @@ class VehiculoResponse(OutputModel):
     activo: bool | None = None
 
 
+class VehiculoCreateResponse(BaseModel):
+    """Respuesta exclusiva de ``POST /vehiculos/`` (LAST_INSERT_ID)."""
+
+    id_vehiculo: int
+
+
 # ── Comandos ──────────────────────────────────────────────────────────────────
 
 class ComandoCreate(InputModel):
@@ -136,6 +142,12 @@ class DemoResponse(OutputModel):
     activo: bool | None = None
 
 
+class DemoCreateResponse(BaseModel):
+    """Respuesta exclusiva de ``POST /demos/`` (LAST_INSERT_ID)."""
+
+    id_demo: int
+
+
 class DemoMovimientoCreate(InputModel):
     id_demo: int = Field(..., gt=0)
     id_comando: int = Field(..., gt=0)
@@ -160,6 +172,12 @@ class DemoMovimientoResponse(OutputModel):
     codigo: int | None = None
     duracion_ms: int | None = None
     pausa_ms: int | None = None
+
+
+class DemoMovimientoCreateResponse(BaseModel):
+    """Confirmación de inserción, cuyo procedimiento no retorna filas."""
+
+    message: str
 
 
 class DemoEjecucionRequest(InputModel):
