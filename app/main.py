@@ -7,7 +7,15 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import comandos, demo_ws, demos, estado, movimientos, vehiculos
+from app.routers import (
+    comandos,
+    demo_execution,
+    demos,
+    estado,
+    hardware_ws,
+    movimientos,
+    vehiculos,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,7 +30,7 @@ app = FastAPI(
         "|--------|--------|-----|----------------|\n"
         "| 1 | `POST` | `/vehiculos/{id}/comando` | Estado + historial en una transacción |\n"
         "| 2 | `GET`  | `/vehiculos/{id}/historial` | Últimos 10 movimientos |\n"
-        "| 3 | `WS`   | `/ws/demo` | Estado actualizado, sin historial |\n"
+        "| 3 | `POST` | `/demos/ejecutar` | Demo transmitida por WebSocket, sin historial |\n"
     ),
     version="2.1.0",
 )
@@ -41,7 +49,8 @@ app.include_router(comandos.router)
 app.include_router(estado.router)
 app.include_router(movimientos.router)
 app.include_router(demos.router)
-app.include_router(demo_ws.router)
+app.include_router(demo_execution.router)
+app.include_router(hardware_ws.router)
 
 
 @app.get("/", tags=["Health"])

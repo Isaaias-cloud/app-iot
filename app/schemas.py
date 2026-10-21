@@ -162,6 +162,23 @@ class DemoMovimientoResponse(OutputModel):
     pausa_ms: int | None = None
 
 
+class DemoEjecucionRequest(InputModel):
+    id_demo: int = Field(..., gt=0, description="ID de la demo que se ejecutará")
+    id_vehiculo: int | None = Field(
+        None,
+        gt=0,
+        description="ID del vehículo; puede omitirse si lo devuelve el stored procedure",
+    )
+
+
+class DemoEjecucionResponse(OutputModel):
+    message: str
+    id_demo: int
+    id_vehiculo: int
+    total_movimientos: int
+    movimientos_ejecutados: int
+
+
 class OperationResponse(OutputModel):
     message: str
     id: int | None = None

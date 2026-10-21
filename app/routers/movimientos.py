@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Path
 
-from app.routers.demo_ws import manager
+from app.routers.hardware_ws import manager
 from app.schemas import ComandoEnviar, ComandoResponseMovimiento, HistorialItem
 from app.services import HistoryService
 

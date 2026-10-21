@@ -1,8 +1,8 @@
 # IoT Car API — FastAPI + MySQL
 
 API de la **Práctica 2.5: APIs para IoT en entorno Dev**. Expone CRUD para
-vehículos, comandos y demos, consulta de estado e historial, y una demo por
-WebSocket. La lógica de persistencia se mantiene en los 21 stored procedures
+vehículos, comandos y demos, consulta de estado e historial, y ejecución HTTP
+de demos transmitidas por el WebSocket del vehículo. La lógica de persistencia se mantiene en los 21 stored procedures
 existentes; no se modifican sus nombres ni las tablas de `vehiculo_iot`.
 
 ## Requisitos
@@ -55,14 +55,15 @@ app/
     ├── estado.py           # sp_actualizar_estado y sp_obtener_estado
     ├── movimientos.py      # Pruebas 1 y 2
     ├── demos.py            # Demos y movimientos de demo
-    └── demo_ws.py          # Prueba 3 por WebSocket
+    ├── demo_execution.py   # Ejecución HTTP de demos
+    └── hardware_ws.py      # WebSocket global por vehículo
 ```
 
 ## Documentación de la API
 
-La API tiene 21 endpoints REST de negocio publicados en OpenAPI, el health
+La API tiene 22 endpoints REST de negocio publicados en OpenAPI, el health
 check `/` y tres alias de compatibilidad que el código registra pero oculta de
-Swagger. También expone dos WebSockets. En las rutas con `{id_...}`, los
+Swagger. También expone un WebSocket global por vehículo. En las rutas con `{id_...}`, los
 ejemplos usan el valor `1`; sustitúyelo por el identificador real. Los ejemplos
 de respuesta son ilustrativos y muestran la forma definida por los modelos
 Pydantic; los valores y las columnas adicionales dependen de los stored
@@ -510,6 +511,28 @@ no estén especificadas.
   {"message": "Movimiento de demo eliminado correctamente", "id": 1}
   ```
 
+#### Ejecutar demo (`POST /demos/ejecutar`)
+- **Descripción:** obtiene los movimientos con `sp_obtener_movimientos_demo`, los ordena por `orden`, los transmite al WebSocket global del vehículo y actualiza el estado con `sp_actualizar_estado`. No registra historial.
+- **Rutas:**
+  - Local: `http://localhost:8000/demos/ejecutar`
+  - IP pública: `http://3.223.103.55:8000/demos/ejecutar`
+  - Dominio (HTTPS): `https://api-iot-26.duckdns.org/demos/ejecutar`
+- **Body:** `id_demo` es obligatorio; `id_vehiculo` puede omitirse si el procedimiento devuelve ese dato. El vehículo debe tener activa su conexión `WS /ws/vehiculo/{id_vehiculo}`.
+  ```json
+  {"id_demo": 1, "id_vehiculo": 1}
+  ```
+- **Respuesta (200):**
+  ```json
+  {
+    "message": "Ejecución de DEMO completada correctamente",
+    "id_demo": 1,
+    "id_vehiculo": 1,
+    "total_movimientos": 2,
+    "movimientos_ejecutados": 2
+  }
+  ```
+- Cada evento `movimiento` enviado al vehículo contiene el comando, código, orden, `duracion_ms` y `pausa_ms`. La API espera la duración de cada paso y la pausa configurada entre pasos antes de completar la petición.
+
 ### Alias de compatibilidad
 
 Estas rutas funcionan, pero están marcadas `include_in_schema=False` y por eso
@@ -616,41 +639,27 @@ establece la conexión y luego se intercambian mensajes JSON. Para la IP se usa
   }
   ```
 
-#### Reproducir o detener demo (`WS /ws/demo`)
-- **Descripción:** reproduce los movimientos ordenados de una demo, actualiza el estado del vehículo por paso y no registra movimientos en el historial.
-- **Rutas:**
-  - Local: `ws://localhost:8000/ws/demo`
-  - IP pública: `ws://3.223.103.55:8000/ws/demo`
-  - Dominio seguro: `wss://api-iot-26.duckdns.org/ws/demo`
-- **Iniciar:** `id_demo` es obligatorio y debe ser mayor que cero. Se puede omitir `id_vehiculo` si los movimientos devueltos por la base incluyen ese dato.
-  ```json
-  {"action": "start", "id_demo": 1, "id_vehiculo": 1}
-  ```
-- **Detener:**
-  ```json
-  {"action": "stop"}
-  ```
-- **Ejemplos de eventos del servidor:**
-  ```json
-  {"event": "demo_start", "id_demo": 1, "total": 2}
-  ```
-  ```json
-  {
-    "event": "movimiento",
-    "paso": 1,
-    "total": 2,
-    "orden": 1,
-    "id_comando": 2,
-    "comando": "Avanzar",
-    "codigo": 2,
-    "duracion_ms": 1000,
-    "pausa_ms": 250
-  }
-  ```
-  ```json
-  {"event": "done", "id_demo": 1, "total": 2}
-  ```
-  Al detener, el servidor emite `{"event":"stopped"}`; ante errores, emite un objeto con `event: "error"` y `detail`.
+#### Evento de demo enviado por este canal
+La ejecución se inicia mediante `POST /demos/ejecutar`; cada movimiento se
+transmite a las conexiones del vehículo por este WebSocket:
+
+```json
+{
+  "event": "nuevo_movimiento",
+  "id_demo": 1,
+  "id_vehiculo": 1,
+  "paso": 1,
+  "total": 2,
+  "orden": 1,
+  "id_comando": 2,
+  "comando": "Avanzar",
+  "codigo": 2,
+  "conectado": true,
+  "origen": "DEMO",
+  "duracion_ms": 1000,
+  "pausa_ms": 250
+}
+```
 
 ## Guía de las tres pruebas funcionales
 
@@ -679,26 +688,24 @@ Se ejecuta `sp_obtener_historial`, que debe devolver los registros más nuevos
 primero. La API conserva únicamente `rows[:10]`, por lo que la respuesta nunca
 contiene más de 10 movimientos.
 
-### 3. Demo por WebSocket
+### 3. Ejecución HTTP de DEMO
 
-Conecta a `ws://localhost:8000/ws/demo` y envía:
+Conecta el vehículo a `ws://localhost:8000/ws/vehiculo/1` y envía:
 
-```json
-{"action":"start", "id_demo":1, "id_vehiculo":1}
+```http
+POST http://localhost:8000/demos/ejecutar
+Content-Type: application/json
 ```
 
-Si `sp_obtener_movimientos_demo` ya devuelve `id_vehiculo`, el campo del
-mensaje puede omitirse. El servidor ordena por `orden`, actualiza el estado con
-`sp_actualizar_estado` antes de emitir cada movimiento, respeta
-`duracion_ms` y `pausa_ms`, y envía `done` al finalizar. Nunca ejecuta
-`sp_registrar_historial`, por lo que el historial no cambia durante la demo.
+```json
+{"id_demo": 1, "id_vehiculo": 1}
+```
 
-Eventos principales:
-
-- `demo_start`: contiene `id_demo` y el total de pasos.
-- `movimiento`: contiene paso, orden, comando, código y tiempos.
-- `done`: demo completada.
-- `stopped`: reproducción cancelada después de `{"action":"stop"}`.
+Si `sp_obtener_movimientos_demo` devuelve `id_vehiculo`, ese campo del cuerpo
+puede omitirse. La API transmite cada movimiento en orden por el WebSocket del
+vehículo, ejecuta `sp_actualizar_estado` por paso y respeta `duracion_ms` y
+`pausa_ms` entre movimientos. No ejecuta `sp_registrar_historial`, por lo que
+la DEMO no agrega registros al historial de comandos.
 
 ## Comprobaciones rápidas
 
