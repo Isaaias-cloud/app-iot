@@ -1,6 +1,6 @@
 """Endpoints CRUD de vehículos."""
 
-from fastapi import APIRouter, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from app.schemas import (
     OperationResponse,
@@ -10,6 +10,7 @@ from app.schemas import (
     VehiculoUpdate,
 )
 from app.services import VehicleService
+from app.security import AuthContext, require_admin
 
 
 router = APIRouter(prefix="/vehiculos", tags=["Vehículos"])
@@ -28,7 +29,7 @@ def _db_error(exc: Exception) -> HTTPException:
     status_code=status.HTTP_201_CREATED,
     summary="Crear vehículo",
 )
-def crear_vehiculo(body: VehiculoCreate) -> VehiculoCreateResponse:
+def crear_vehiculo(body: VehiculoCreate, _context: AuthContext = Depends(require_admin)) -> VehiculoCreateResponse:
     try:
         rows = service.create(
             body.nombre,
@@ -68,7 +69,11 @@ def obtener_vehiculo(id_vehiculo: int = Path(..., gt=0)):
 
 
 @router.put("/{id_vehiculo}", response_model=OperationResponse, summary="Actualizar vehículo")
-def actualizar_vehiculo(id_vehiculo: int = Path(..., gt=0), body: VehiculoUpdate = ...):
+def actualizar_vehiculo(
+    id_vehiculo: int = Path(..., gt=0),
+    body: VehiculoUpdate = ...,
+    _context: AuthContext = Depends(require_admin),
+):
     try:
         service.update(
             id_vehiculo,
@@ -84,7 +89,10 @@ def actualizar_vehiculo(id_vehiculo: int = Path(..., gt=0), body: VehiculoUpdate
 
 
 @router.delete("/{id_vehiculo}", response_model=OperationResponse, summary="Eliminar vehículo")
-def eliminar_vehiculo(id_vehiculo: int = Path(..., gt=0)):
+def eliminar_vehiculo(
+    id_vehiculo: int = Path(..., gt=0),
+    _context: AuthContext = Depends(require_admin),
+):
     try:
         service.delete(id_vehiculo)
         return {"message": "Vehículo eliminado correctamente", "id": id_vehiculo}

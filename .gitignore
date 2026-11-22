@@ -40,3 +40,15 @@ Thumbs.db
 *.sqlite
 *.sqlite3
 *.db
+
+# Respaldos SQL, firmware secrets y credenciales locales
+*.sql
+*.dump
+*.bak
+secrets.h
+**/secrets.h
+credentials*.json
+*credentials*
+device_tokens*.json
+*.pem
+*.key

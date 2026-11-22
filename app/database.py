@@ -7,15 +7,24 @@ transacción real, que es necesaria para el endpoint de movimiento individual.
 
 from contextlib import contextmanager
 from collections.abc import Iterator
+import logging
 from typing import Any
 
 from fastapi import HTTPException
 from mysql.connector import Error as MySQLError, pooling
 
-from app.config import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+from app.config import (
+    DB_CONNECT_TIMEOUT,
+    DB_HOST,
+    DB_NAME,
+    DB_PASSWORD,
+    DB_PORT,
+    DB_USER,
+)
 
 
 _pool: pooling.MySQLConnectionPool | None = None
+logger = logging.getLogger(__name__)
 
 
 def _http_database_error(exc: MySQLError) -> HTTPException:
@@ -38,6 +47,11 @@ def _http_database_error(exc: MySQLError) -> HTTPException:
     return HTTPException(status_code=400, detail=f"Error de base de datos: {message}")
 
 
+def http_database_error(exc: MySQLError) -> HTTPException:
+    """Punto de extensión público para repositorios SQL nuevos."""
+    return _http_database_error(exc)
+
+
 def get_pool() -> pooling.MySQLConnectionPool:
     """Inicializa y retorna el pool de conexiones (singleton)."""
     global _pool
@@ -50,6 +64,7 @@ def get_pool() -> pooling.MySQLConnectionPool:
             user=DB_USER,
             password=DB_PASSWORD,
             database=DB_NAME,
+            connection_timeout=DB_CONNECT_TIMEOUT,
             # Las operaciones independientes se confirman automáticamente.
             # Las operaciones agrupadas usan transaction(), que desactiva esto.
             autocommit=True,
@@ -60,6 +75,32 @@ def get_pool() -> pooling.MySQLConnectionPool:
 def get_connection():
     """Obtiene una conexión del pool."""
     return get_pool().get_connection()
+
+
+def check_database_connection() -> bool:
+    """Comprueba la conectividad real con MySQL ejecutando ``SELECT 1``.
+
+    La conexión siempre se devuelve al pool, incluso si RDS está inaccesible.
+    Los errores de autenticación, red y timeout se registran sin propagarse para
+    que el endpoint de diagnóstico pueda responder con HTTP 503 sin derribar la
+    aplicación.
+    """
+    connection = None
+    cursor = None
+    try:
+        connection = get_connection()
+        cursor = connection.cursor()
+        cursor.execute("SELECT 1")
+        result = cursor.fetchone()
+        return result is not None and result[0] == 1
+    except (MySQLError, OSError, TimeoutError) as exc:
+        logger.warning("Database health check failed: %s", type(exc).__name__)
+        return False
+    finally:
+        if cursor is not None:
+            cursor.close()
+        if connection is not None:
+            connection.close()
 
 
 def call_procedure(

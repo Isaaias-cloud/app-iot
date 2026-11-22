@@ -3,14 +3,18 @@
 import asyncio
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path
 
 from app.routers.hardware_ws import manager
 from app.schemas import ComandoEnviar, ComandoResponseMovimiento, HistorialItem
 from app.services import HistoryService
+from app.repositories.auth import AccessRepository
+from app.security import AuthContext, require_allowed_command, require_vehicle_access
+from app.routers.demo_execution import cancel_demo
 
 router = APIRouter(prefix="/vehiculos", tags=["Vehículos"])
 service = HistoryService()
+access_repository = AccessRepository()
 
 
 def _db_error(exc: Exception) -> HTTPException:
@@ -30,6 +34,7 @@ def _db_error(exc: Exception) -> HTTPException:
 async def enviar_comando(
     id_vehiculo: int = Path(..., gt=0, description="ID del vehículo"),
     body: ComandoEnviar = ...,
+    _context: AuthContext = Depends(require_vehicle_access),
 ):
     """
     Envía un comando a un vehículo realizando dos operaciones en BD:
@@ -42,6 +47,13 @@ async def enviar_comando(
     falla, el estado y el historial se revierten juntos.
     """
     try:
+        command = require_allowed_command(id_vehiculo, body.id_comando)
+
+        # El código 0 es DETENER: se publica la cancelación antes de iniciar
+        # cualquier otra operación de la secuencia DEMO.
+        if int(command["codigo"]) == 0:
+            cancel_demo(id_vehiculo)
+
         await asyncio.to_thread(
             service.send_command_transactionally,
             id_vehiculo,
@@ -58,7 +70,10 @@ async def enviar_comando(
             "origen": body.origen,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        await manager.broadcast_to_vehicle(id_vehiculo, evento_ws)
+        # El comando se entrega al hardware del mismo vehículo y el eco se
+        # publica únicamente a los clientes suscritos a ese vehículo.
+        await manager.broadcast_to_devices(id_vehiculo, {**evento_ws, "destino": "DISPOSITIVO"})
+        await manager.broadcast_to_clients(id_vehiculo, evento_ws)
 
         return ComandoResponseMovimiento(
             message="Comando registrado correctamente",
@@ -80,6 +95,7 @@ async def enviar_comando(
 )
 def obtener_historial(
     id_vehiculo: int = Path(..., gt=0, description="ID del vehículo"),
+    _context: AuthContext = Depends(require_vehicle_access),
 ):
     """
     Retorna los **últimos 10 movimientos** registrados para el vehículo.

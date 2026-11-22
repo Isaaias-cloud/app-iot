@@ -56,6 +56,9 @@ app/
     ├── movimientos.py      # Pruebas 1 y 2
     ├── demos.py            # Demos y movimientos de demo
     ├── demo_execution.py   # Ejecución HTTP de demos
+    ├── owner_demos.py      # Demos privadas del propietario
+    ├── admin.py             # Administración y capacidades por modelo
+    ├── me.py                # Vehículos propios y soporte temporal
     └── hardware_ws.py      # WebSocket global por vehículo
 ```
 
@@ -716,3 +719,158 @@ python -c "from app.main import app; print(len(app.routes), 'rutas cargadas')"
 
 La comprobación de endpoints que requieren MySQL debe ejecutarse con la base
 de datos y los stored procedures disponibles.
+
+## Etapa 3: administración incremental
+
+La migración 0001 agrega repositorios SQL parametrizados en
+`app/repositories/`, servicios en `app/services_admin.py` y routers en
+`app/routers/admin.py` y `app/routers/me.py`. Las rutas legacy continúan
+utilizando sus stored procedures sin cambios.
+
+Rutas nuevas documentadas en `/docs`:
+
+| Método | Ruta | Propósito |
+| --- | --- | --- |
+| `GET` | `/admin/dashboard` | Métricas de inventario, usuarios, demos y auditoría |
+| `GET/POST/PUT` | `/admin/modelos` | Catálogo de modelos comerciales |
+| `GET/POST/PUT` | `/admin/unidades` | Inventario y unidades físicas |
+| `GET/POST/PUT` | `/admin/clientes` | Clientes sin devolver `password_hash` |
+| `GET/POST` | `/admin/asignaciones` | Historial y asignación de propietario |
+| `POST` | `/admin/asignaciones/{id}/revocar` | Revocación no destructiva |
+| `GET` | `/admin/auditoria` | Consulta paginada de auditoría |
+| `GET` | `/me/vehiculos` | Unidades activas del usuario autenticado |
+
+Todas las rutas nuevas requieren un `AuthContext` generado por la futura capa
+de autenticación. Durante Etapa 3, si no existe ese contexto, responden `401`
+deliberadamente; no aceptan `role`, `user_id` ni permisos enviados por el
+cliente. La Etapa 4 conectará las sesiones de `sesiones_usuario` con
+`request.state.auth_context`.
+
+Los repositorios traducen conflictos de unicidad y llaves foráneas a `409` o
+`400`, mientras que los servicios traducen recursos inexistentes a `404`. La
+validación de cuerpos y paginación queda reflejada en Swagger mediante `422`.
+
+## Etapa 4: autenticación, RBAC y aislamiento WSS
+
+Archivos principales:
+
+- `app/config.py`: secretos, TTL, rate limit y CORS exclusivamente desde
+  variables de entorno; no contiene contraseñas predeterminadas.
+- `app/tokens.py`: tokens HS256 con expiración y hash SHA-256 persistido en
+  `sesiones_usuario`.
+- `app/repositories/auth.py`: usuarios, roles, sesiones, auditoría y
+  autorización por unidad/comando.
+- `app/services_auth.py`: login, rotación de refresh, logout y hash PBKDF2.
+- `app/routers/auth.py`: `/auth/login`, `/auth/refresh`, `/auth/logout` y
+  `/auth/me`.
+- `app/security.py`: Bearer token, RBAC, propiedad activa, soporte vigente,
+  reserva invitado y validación anti-IDOR.
+- `app/scripts/create_admin.py`: creación interactiva del primer ADMIN.
+- `app/routers/hardware_ws.py`: token antes de `accept`, autorización por
+  vehículo y revalidación periódica de sesión/permisos.
+- `tests/test_stage4_security.py`: pruebas sin conexión a RDS.
+
+Ejecutar localmente:
+
+```powershell
+Copy-Item .env.example .env
+# Completa DB_HOST, DB_USER, DB_PASSWORD, JWT_SECRET y CORS_ORIGINS.
+python -m app.scripts.create_admin --email admin@example.com --name "Admin"
+python -m pytest -q
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+El `JWT_SECRET` debe tener al menos 32 caracteres aleatorios. El access token
+dura 15 minutos por defecto y el refresh token se rota y revoca al utilizarse.
+El login limita por IP/email cinco intentos en 60 segundos; para múltiples
+workers debe sustituirse por un limitador compartido antes de producción.
+
+Para WSS se admite `wss://host/ws/vehiculo/{id}?token=<access-token>` y el
+subprotocolo `bearer,<access-token>`; se recomienda el subprotocolo para evitar
+tokens en URLs registradas por proxies. La conexión se autoriza antes del
+handshake y se revisa cada 15 segundos.
+
+### Criterios de aceptación de Etapa 4
+
+1. Sin `DB_PASSWORD` o `JWT_SECRET` configurados no se emiten tokens ni se
+   inicia una sesión válida.
+2. Login válido devuelve access/refresh; credenciales inválidas devuelven
+   `401`, y el sexto intento dentro de la ventana devuelve `429`.
+3. Logout revoca la sesión y refresh tokens asociados.
+4. User A recibe `403` al consultar/controlar una unidad asignada a User B.
+5. ADMIN recibe `403` al controlar una unidad `VENDIDA` sin soporte vigente y
+   acceso permitido durante la autorización de 30 minutos.
+6. Un comando no presente en `modelo_comandos` devuelve `403`.
+7. `DETENER` cancela la demo activa antes de emitir el paro.
+8. WSS rechaza handshake sin token, separa canales por unidad y cierra cuando
+   expira o se revoca el permiso.
+9. Las rutas legacy conservan sus métodos y contratos, pero ya requieren el
+   contexto de autorización correspondiente.
+
+## Etapa 6 — propietario, soporte y demos privadas
+
+Se añadieron `GET /me/vehiculos` con unidades propias o con soporte vigente
+para el ADMIN, el catálogo `GET /me/soporte/admins` y la gestión de soporte
+temporal. Las demos privadas se gestionan con `/me/demos` y sus rutas de
+movimientos; cada demo queda asociada a `demos_control.alcance = 'USUARIO'` y
+al propietario autenticado.
+
+El backend valida propiedad activa, aislamiento entre usuarios, máximo de 100
+pasos, duración total máxima de 300000 ms y comandos permitidos por
+`modelo_comandos`. También se agregó:
+
+```text
+GET   /admin/modelos/{id_modelo}/comandos
+PATCH /admin/modelos/{id_modelo}/comandos/{id_comando}
+```
+
+Para validar:
+
+```powershell
+python -m pytest -q
+```
+
+La suite aislada de Etapa 6 cubre creación/aislamiento de demos, rechazo de
+comandos fuera del modelo y bloqueo del ADMIN después de revocar soporte.
+
+## Etapa 7 — modo invitado y exhibición
+
+El catálogo público `GET /invitado/vehiculos` solo devuelve unidades con
+`estado_inventario = 'EXHIBICION'`. `POST /invitado/sesion` crea una reserva
+exclusiva de 300 segundos y devuelve un JWT `INVITADO` ligado a la unidad y a
+`id_sesion_invitado`. `POST /invitado/sesion/finalizar` libera la reserva y
+publica `DETENER`.
+
+La limpieza de expirados se ejecuta antes de consultar/reservar; las reservas
+se bloquean transaccionalmente por unidad y la restricción única evita reservas
+concurrentes. El WebSocket libera la reserva al desconectarse o al detectar
+expiración, registra `DESCONECTADA`/`EXPIRADA` y envía `DETENER`.
+
+Validación completa:
+
+```powershell
+python -m pytest -q
+```
+
+La suite incluye los casos de catálogo, reserva de 300 segundos, conflicto
+concurrente, aislamiento de vehículos/rutas, demos de empresa y liberación de
+sesiones invitadas.
+
+## Etapa 8 — hardware y despliegue seguro
+
+El WebSocket acepta clientes web mediante `?token=<JWT>` y hardware mediante
+`?device_token=<secreto>` o la cabecera `X-Device-Token`. Los tokens de hardware
+se configuran exclusivamente en `DEVICE_TOKENS` dentro del `.env` privado de
+producción y cada secreto queda ligado a un único `id_vehiculo`.
+
+`ConnectionManager` separa conexiones `DISPOSITIVO` y `CLIENTE`: los comandos
+se envían al dispositivo del mismo vehículo y la telemetría se reenvía solo a
+los clientes de ese vehículo. Las desconexiones del hardware se registran en
+`auditoria` con `actor_tipo = 'DISPOSITIVO'`.
+
+El runbook completo de EC2, GitHub Pages, prueba física y rollback está en
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). La suite de Etapa 8 se ejecuta con:
+
+```powershell
+python -m pytest -q tests/test_stage8_device_deploy.py
+```

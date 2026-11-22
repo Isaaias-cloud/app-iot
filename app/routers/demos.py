@@ -1,6 +1,6 @@
 """CRUD de demos y de sus movimientos programados."""
 
-from fastapi import APIRouter, HTTPException, Path, status
+from fastapi import APIRouter, Depends, HTTPException, Path, status
 
 from app.schemas import (
     DemoCreate,
@@ -14,10 +14,20 @@ from app.schemas import (
     OperationResponse,
 )
 from app.services import DemoService
+from app.repositories.auth import AccessRepository
+from app.security import (
+    AuthContext,
+    authorize_vehicle,
+    get_auth_context,
+    require_allowed_command,
+    require_demo_access,
+    require_vehicle_access,
+)
 
 
 router = APIRouter(prefix="/demos", tags=["Demos"])
 service = DemoService()
+access_repository = AccessRepository()
 
 
 def _db_error(exc: Exception) -> HTTPException:
@@ -26,14 +36,21 @@ def _db_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=500, detail=f"Error de base de datos: {exc}")
 
 
+def _reject_guest(context: AuthContext) -> None:
+    if "INVITADO" in context.roles:
+        raise HTTPException(status_code=403, detail="El modo invitado solo puede ejecutar demos de empresa.")
+
+
 @router.post(
     "/",
     response_model=DemoCreateResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Crear demo",
 )
-def crear_demo(body: DemoCreate) -> DemoCreateResponse:
+def crear_demo(body: DemoCreate, context: AuthContext = Depends(get_auth_context)) -> DemoCreateResponse:
     try:
+        _reject_guest(context)
+        authorize_vehicle(context, body.id_vehiculo)
         rows = service.create(body.id_vehiculo, body.nombre, body.descripcion)
         if not rows or rows[0].get("id_demo") is None:
             raise HTTPException(
@@ -46,16 +63,27 @@ def crear_demo(body: DemoCreate) -> DemoCreateResponse:
 
 
 @router.get("/vehiculo/{id_vehiculo}", response_model=list[DemoResponse], summary="Listar demos del vehículo")
-def obtener_demos(id_vehiculo: int = Path(..., gt=0)):
+def obtener_demos(
+    id_vehiculo: int = Path(..., gt=0),
+    context: AuthContext = Depends(require_vehicle_access),
+):
     try:
-        return service.list_for_vehicle(id_vehiculo)
+        rows = service.list_for_vehicle(id_vehiculo)
+        if "INVITADO" not in context.roles:
+            return rows
+        return [row for row in rows if access_repository.is_company_demo(int(row["id_demo"]))]
     except Exception as exc:
         raise _db_error(exc) from exc
 
 
 @router.put("/{id_demo}", response_model=OperationResponse, summary="Actualizar demo")
-def actualizar_demo(id_demo: int = Path(..., gt=0), body: DemoUpdate = ...):
+def actualizar_demo(
+    id_demo: int = Path(..., gt=0),
+    body: DemoUpdate = ...,
+    context: AuthContext = Depends(require_demo_access),
+):
     try:
+        _reject_guest(context)
         service.update(id_demo, body.nombre, body.descripcion, body.activo)
         return {"message": "Operación realizada correctamente", "id": id_demo}
     except Exception as exc:
@@ -63,8 +91,12 @@ def actualizar_demo(id_demo: int = Path(..., gt=0), body: DemoUpdate = ...):
 
 
 @router.delete("/{id_demo}", response_model=OperationResponse, summary="Eliminar demo")
-def eliminar_demo(id_demo: int = Path(..., gt=0)):
+def eliminar_demo(
+    id_demo: int = Path(..., gt=0),
+    context: AuthContext = Depends(require_demo_access),
+):
     try:
+        _reject_guest(context)
         service.delete(id_demo)
         return {"message": "Demo eliminada correctamente", "id": id_demo}
     except Exception as exc:
@@ -77,8 +109,17 @@ def eliminar_demo(id_demo: int = Path(..., gt=0)):
     status_code=status.HTTP_201_CREATED,
     summary="Agregar movimiento a una demo",
 )
-def agregar_movimiento_demo(body: DemoMovimientoCreate) -> DemoMovimientoCreateResponse:
+def agregar_movimiento_demo(
+    body: DemoMovimientoCreate,
+    context: AuthContext = Depends(get_auth_context),
+) -> DemoMovimientoCreateResponse:
     try:
+        _reject_guest(context)
+        vehicle_id = access_repository.demo_vehicle(body.id_demo)
+        if vehicle_id is None:
+            raise HTTPException(status_code=404, detail="Demo no encontrada.")
+        authorize_vehicle(context, vehicle_id)
+        require_allowed_command(vehicle_id, body.id_comando)
         service.add_movement(
             body.id_demo,
             body.id_comando,
@@ -105,7 +146,10 @@ router.add_api_route(
 
 
 @router.get("/{id_demo}/movimientos", response_model=list[DemoMovimientoResponse], summary="Listar movimientos de una demo")
-def obtener_movimientos_demo(id_demo: int = Path(..., gt=0)):
+def obtener_movimientos_demo(
+    id_demo: int = Path(..., gt=0),
+    _context: AuthContext = Depends(require_demo_access),
+):
     try:
         return service.list_movements(id_demo)
     except Exception as exc:
@@ -120,8 +164,15 @@ def obtener_movimientos_demo(id_demo: int = Path(..., gt=0)):
 def actualizar_movimiento_demo(
     id_demo_movimiento: int = Path(..., gt=0),
     body: DemoMovimientoUpdate = ...,
+    context: AuthContext = Depends(get_auth_context),
 ):
     try:
+        _reject_guest(context)
+        vehicle_id = access_repository.movement_vehicle(id_demo_movimiento)
+        if vehicle_id is None:
+            raise HTTPException(status_code=404, detail="Movimiento de demo no encontrado.")
+        authorize_vehicle(context, vehicle_id)
+        require_allowed_command(vehicle_id, body.id_comando)
         service.update_movement(
             id_demo_movimiento,
             body.id_comando,
@@ -150,8 +201,16 @@ router.add_api_route(
     response_model=OperationResponse,
     summary="Eliminar movimiento de demo",
 )
-def eliminar_movimiento_demo(id_demo_movimiento: int = Path(..., gt=0)):
+def eliminar_movimiento_demo(
+    id_demo_movimiento: int = Path(..., gt=0),
+    context: AuthContext = Depends(get_auth_context),
+):
     try:
+        _reject_guest(context)
+        vehicle_id = access_repository.movement_vehicle(id_demo_movimiento)
+        if vehicle_id is None:
+            raise HTTPException(status_code=404, detail="Movimiento de demo no encontrado.")
+        authorize_vehicle(context, vehicle_id)
         service.delete_movement(id_demo_movimiento)
         return {
             "message": "Movimiento de demo eliminado correctamente",
