@@ -64,9 +64,11 @@ app/
 
 ## Documentación de la API
 
-La API tiene 22 endpoints REST de negocio publicados en OpenAPI, el health
+La API tiene unas 59 operaciones REST de negocio publicadas en OpenAPI, el health
 check `/` y tres alias de compatibilidad que el código registra pero oculta de
-Swagger. También expone un WebSocket global por vehículo. En las rutas con `{id_...}`, los
+Swagger (`POST /demos/movimientos`, `PUT /demos/movimientos/{id_demo_movimiento}` y
+`DELETE /demos/movimiento/{id_demo_movimiento}`). También expone un WebSocket global
+por vehículo, `WS /ws/vehiculo/{id_vehiculo}`. En las rutas con `{id_...}`, los
 ejemplos usan el valor `1`; sustitúyelo por el identificador real. Los ejemplos
 de respuesta son ilustrativos y muestran la forma definida por los modelos
 Pydantic; los valores y las columnas adicionales dependen de los stored
@@ -740,11 +742,13 @@ Rutas nuevas documentadas en `/docs`:
 | `GET` | `/admin/auditoria` | Consulta paginada de auditoría |
 | `GET` | `/me/vehiculos` | Unidades activas del usuario autenticado |
 
-Todas las rutas nuevas requieren un `AuthContext` generado por la futura capa
-de autenticación. Durante Etapa 3, si no existe ese contexto, responden `401`
-deliberadamente; no aceptan `role`, `user_id` ni permisos enviados por el
-cliente. La Etapa 4 conectará las sesiones de `sesiones_usuario` con
-`request.state.auth_context`.
+Todas las rutas nuevas requieren un `AuthContext` autenticado. La seguridad está
+implementada en `app/security.py` mediante el esquema `HTTPBearer` de FastAPI y
+dependencias encadenadas: `get_auth_context` valida el token y la sesión, y de él
+derivan `require_admin`, `require_user_or_admin`, `require_vehicle_access`,
+`require_demo_access` y `require_allowed_command`. Ninguna ruta acepta `role`,
+`user_id` ni permisos enviados por el cliente; los roles y las sesiones se
+consultan en `roles`, `usuario_roles` y `sesiones_usuario`.
 
 Los repositorios traducen conflictos de unicidad y llaves foráneas a `409` o
 `400`, mientras que los servicios traducen recursos inexistentes a `404`. La
