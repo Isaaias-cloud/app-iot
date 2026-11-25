@@ -62,6 +62,42 @@ def _vehicle_id(body_id: int | None, movements: list[dict[str, Any]]) -> int:
     return id_vehiculo
 
 
+async def _publish_demo_stop(
+    id_vehiculo: int,
+    id_demo: int,
+    stop_cmd: dict[str, Any] | None,
+) -> None:
+    """Publica DETENER (codigo=0) en pausas de demo y al finalizar la secuencia."""
+    stop_id = int(stop_cmd["id_comando"]) if stop_cmd and stop_cmd.get("id_comando") else 0
+    stop_name = str(stop_cmd.get("nombre") or "DETENER") if stop_cmd else "DETENER"
+
+    stop_event = {
+        "event": "nuevo_movimiento",
+        "id_demo": id_demo,
+        "id_vehiculo": id_vehiculo,
+        "id_comando": stop_id,
+        "comando": stop_name,
+        "codigo": 0,
+        "conectado": True,
+        "origen": "DEMO",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    await manager.broadcast_to_devices(
+        id_vehiculo,
+        {**stop_event, "destino": "DISPOSITIVO"},
+    )
+    await manager.broadcast_to_clients(id_vehiculo, stop_event)
+
+    if stop_id > 0:
+        await asyncio.to_thread(
+            state_service.update,
+            id_vehiculo,
+            stop_id,
+            True,
+        )
+
+
 @router.post(
     "/ejecutar",
     response_model=DemoEjecucionResponse,
@@ -131,6 +167,12 @@ async def ejecutar_demo(
                         detail="La demo contiene movimientos asociados a vehículos distintos",
                     )
 
+        stop_cmd = await asyncio.to_thread(
+            access_repository.command_by_code,
+            id_vehiculo,
+            0,
+        )
+
         total = len(movimientos)
         async with _vehicle_locks[id_vehiculo]:
             cancel_event = asyncio.Event()
@@ -196,6 +238,7 @@ async def ejecutar_demo(
                         pass
 
                     if index < total and movimiento["pausa_ms"] > 0:
+                        await _publish_demo_stop(id_vehiculo, body.id_demo, stop_cmd)
                         try:
                             await asyncio.wait_for(
                                 cancel_event.wait(), movimiento["pausa_ms"] / 1000
@@ -204,6 +247,10 @@ async def ejecutar_demo(
                             break
                         except asyncio.TimeoutError:
                             pass
+
+                # Al terminar todos los pasos sin cancelación, detener el vehículo.
+                if not cancelled and executed > 0:
+                    await _publish_demo_stop(id_vehiculo, body.id_demo, stop_cmd)
             finally:
                 if _active_demo_cancel_events.get(id_vehiculo) is cancel_event:
                     _active_demo_cancel_events.pop(id_vehiculo, None)
