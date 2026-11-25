@@ -133,9 +133,31 @@ async def stop_vehicle_safely(id_vehiculo: int) -> None:
 async def release_guest_connection(context: AuthContext | None, expired: bool = False) -> None:
     if context is None or context.guest_session_id is None:
         return
-    released = await asyncio.to_thread(guest_service.release_connection, context.guest_session_id, expired)
-    if released and (released.get("estado") == "ACTIVA" or expired):
-        await stop_vehicle_safely(int(released["id_vehiculo"]))
+    released = None
+    try:
+        released = await asyncio.to_thread(
+            guest_service.release_connection, context.guest_session_id, expired
+        )
+    except Exception:
+        logger.exception("No se pudo liberar la sesión de invitado id_sesion=%s", context.guest_session_id)
+
+    id_vehiculo = released.get("id_vehiculo") if released else None
+    if id_vehiculo is None:
+        try:
+            session = await asyncio.to_thread(
+                guest_service.repository.guest_session_by_id, context.guest_session_id
+            )
+            if session is not None:
+                id_vehiculo = session.get("id_vehiculo")
+        except Exception:
+            logger.exception(
+                "No se pudo resolver el vehículo de la sesión de invitado id_sesion=%s",
+                context.guest_session_id,
+            )
+
+    should_stop = expired or released is None or released.get("estado") == "ACTIVA"
+    if id_vehiculo is not None and should_stop:
+        await stop_vehicle_safely(int(id_vehiculo))
 
 
 async def record_device_disconnect(id_vehiculo: int) -> None:

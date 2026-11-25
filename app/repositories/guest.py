@@ -104,6 +104,25 @@ class GuestRepository(BaseRepository):
                 connection=connection,
             )
 
+    def cancel_reservation(self, session_id: int, state: str = "CANCELADA") -> None:
+        """Libera una reserva creada que no llegó a entregarse al cliente."""
+        self.execute(
+            """
+            UPDATE reservas_exhibicion
+            SET estado = %s, liberada_en = COALESCE(liberada_en, UTC_TIMESTAMP(6))
+            WHERE id_sesion_invitado = %s AND estado = 'ACTIVA'
+            """,
+            (state, session_id),
+        )
+        self.execute(
+            """
+            UPDATE sesiones_invitado
+            SET estado = %s, desconectada_en = COALESCE(desconectada_en, UTC_TIMESTAMP(6))
+            WHERE id_sesion_invitado = %s AND estado = 'ACTIVA'
+            """,
+            (state, session_id),
+        )
+
     def replace_token_hash(self, session_id: int, token_hash_value: str) -> None:
         self.execute(
             "UPDATE sesiones_invitado SET token_hash = %s WHERE id_sesion_invitado = %s",

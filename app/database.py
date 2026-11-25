@@ -8,10 +8,12 @@ transacción real, que es necesaria para el endpoint de movimiento individual.
 from contextlib import contextmanager
 from collections.abc import Iterator
 import logging
+import threading
+import time
 from typing import Any
 
 from fastapi import HTTPException
-from mysql.connector import Error as MySQLError, pooling
+from mysql.connector import Error as MySQLError, PoolError, pooling
 
 from app.config import (
     DB_CONNECT_TIMEOUT,
@@ -24,7 +26,12 @@ from app.config import (
 
 
 _pool: pooling.MySQLConnectionPool | None = None
+_pool_lock = threading.Lock()
 logger = logging.getLogger(__name__)
+
+POOL_SIZE = 20
+POOL_ACQUIRE_RETRIES = 8
+POOL_ACQUIRE_DELAY_S = 0.15
 
 
 def _http_database_error(exc: MySQLError) -> HTTPException:
@@ -53,28 +60,38 @@ def http_database_error(exc: MySQLError) -> HTTPException:
 
 
 def get_pool() -> pooling.MySQLConnectionPool:
-    """Inicializa y retorna el pool de conexiones (singleton)."""
+    """Inicializa y retorna el pool de conexiones (singleton seguro entre hilos)."""
     global _pool
     if _pool is None:
-        _pool = pooling.MySQLConnectionPool(
-            pool_name="iot_pool",
-            pool_size=5,
-            host=DB_HOST,
-            port=DB_PORT,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            database=DB_NAME,
-            connection_timeout=DB_CONNECT_TIMEOUT,
-            # Las operaciones independientes se confirman automáticamente.
-            # Las operaciones agrupadas usan transaction(), que desactiva esto.
-            autocommit=True,
-        )
+        with _pool_lock:
+            if _pool is None:
+                _pool = pooling.MySQLConnectionPool(
+                    pool_name="iot_pool",
+                    pool_size=POOL_SIZE,
+                    pool_reset_session=True,
+                    host=DB_HOST,
+                    port=DB_PORT,
+                    user=DB_USER,
+                    password=DB_PASSWORD,
+                    database=DB_NAME,
+                    connection_timeout=DB_CONNECT_TIMEOUT,
+                    # Las operaciones independientes se confirman automáticamente.
+                    # Las operaciones agrupadas usan transaction(), que desactiva esto.
+                    autocommit=True,
+                )
     return _pool
 
 
 def get_connection():
-    """Obtiene una conexión del pool."""
-    return get_pool().get_connection()
+    """Obtiene una conexión del pool esperando brevemente ante picos de carga."""
+    pool = get_pool()
+    for attempt in range(POOL_ACQUIRE_RETRIES):
+        try:
+            return pool.get_connection()
+        except PoolError:
+            if attempt == POOL_ACQUIRE_RETRIES - 1:
+                raise
+            time.sleep(POOL_ACQUIRE_DELAY_S)
 
 
 def check_database_connection() -> bool:
@@ -203,4 +220,3 @@ def call_transactional(procedures: list[tuple[str, tuple[Any, ...]]]) -> None:
     with transaction() as conn:
         for proc_name, args in procedures:
             call_procedure(proc_name, args, connection=conn)
-

@@ -1,8 +1,21 @@
 """Modelos Pydantic v2 para los 21 stored procedures de la API."""
 
-from datetime import datetime
+import json
+from datetime import datetime, timezone
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+def _as_utc_datetime(value):
+    """Normaliza los datetime naive de MySQL a UTC para serializarlos con offset."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+    return value
 
 
 class InputModel(BaseModel):
@@ -339,6 +352,25 @@ class AuditoriaResponse(OutputModel):
     detalle: dict | None = None
     creado_en: datetime
 
+    @field_validator("detalle", mode="before")
+    @classmethod
+    def _parse_detalle(cls, value):
+        """mysql-connector entrega la columna JSON como str; Pydantic exige dict."""
+        if value is None or isinstance(value, dict):
+            return value
+        if isinstance(value, (bytes, bytearray)):
+            value = bytes(value).decode("utf-8", errors="replace")
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            try:
+                parsed = json.loads(text)
+            except (ValueError, TypeError):
+                return None
+            return parsed if isinstance(parsed, dict) else None
+        return value
+
 
 class DashboardResponse(BaseModel):
     vehiculos: int
@@ -434,6 +466,11 @@ class GuestVehicleResponse(OutputModel):
     estado: str
     libera_en: datetime | None = None
 
+    @field_validator("libera_en", mode="before")
+    @classmethod
+    def _utc_libera_en(cls, value):
+        return _as_utc_datetime(value)
+
 
 class GuestSessionCreate(InputModel):
     id_vehiculo: int = Field(..., gt=0)
@@ -446,6 +483,11 @@ class GuestSessionResponse(BaseModel):
     id_vehiculo: int
     id_sesion_invitado: int
     expira_en: datetime
+
+    @field_validator("expira_en", mode="before")
+    @classmethod
+    def _utc_expira_en(cls, value):
+        return _as_utc_datetime(value)
 
 
 # ── Autenticación / Etapa 4 ───────────────────────────────────────────────────

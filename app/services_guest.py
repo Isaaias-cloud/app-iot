@@ -1,5 +1,6 @@
 """Casos de uso de modo invitado y reservas de exhibición."""
 
+import logging
 import secrets
 from datetime import datetime, timezone
 
@@ -9,6 +10,13 @@ from app.rate_limit import LoginRateLimiter
 from app.repositories.auth import AuthRepository
 from app.repositories.guest import GuestRepository
 from app.tokens import create_guest_token, token_hash
+
+logger = logging.getLogger(__name__)
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Devuelve un datetime con tzinfo UTC para que FastAPI lo serialice con offset."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
 class GuestService:
@@ -31,26 +39,35 @@ class GuestService:
         if result.get("conflict"):
             self.rate_limiter.record_failure(rate_key)
             raise HTTPException(status_code=409, detail="La unidad ya tiene una reserva activa.")
-        session_id = int(result["id_sesion_invitado"])
-        token = create_guest_token(session_id=session_id, vehicle_id=vehicle_id, ttl_seconds=300)
-        self.repository.replace_token_hash(session_id, token_hash(token))
-        self.rate_limiter.reset(rate_key)
-        self.audit.add_audit(
-            user_id=None,
-            actor_type="INVITADO",
-            action="GUEST_RESERVATION_CREATED",
-            resource_type="VEHICULO",
-            resource_id=str(vehicle_id),
-            detail={"id_sesion_invitado": session_id, "expira_en": str(result["expira_en"])},
-        )
-        return {
-            "access_token": token,
-            "token_type": "bearer",
-            "expires_in": 300,
-            "id_vehiculo": vehicle_id,
-            "id_sesion_invitado": session_id,
-            "expira_en": result["expira_en"],
-        }
+        session_id: int | None = None
+        try:
+            session_id = int(result["id_sesion_invitado"])
+            token = create_guest_token(session_id=session_id, vehicle_id=vehicle_id, ttl_seconds=300)
+            self.repository.replace_token_hash(session_id, token_hash(token))
+            self.rate_limiter.reset(rate_key)
+            self.audit.add_audit(
+                user_id=None,
+                actor_type="INVITADO",
+                action="GUEST_RESERVATION_CREATED",
+                resource_type="VEHICULO",
+                resource_id=str(vehicle_id),
+                detail={"id_sesion_invitado": session_id, "expira_en": str(result["expira_en"])},
+            )
+            return {
+                "access_token": token,
+                "token_type": "bearer",
+                "expires_in": 300,
+                "id_vehiculo": vehicle_id,
+                "id_sesion_invitado": session_id,
+                "expira_en": _as_utc(result["expira_en"]),
+            }
+        except Exception:
+            if session_id is not None:
+                try:
+                    self.repository.cancel_reservation(session_id)
+                except Exception:
+                    logger.exception("No se pudo liberar la reserva de invitado id_sesion=%s", session_id)
+            raise
 
     def finalize(self, session_id: int) -> dict:
         session = self.repository.release_guest_session(session_id, "CANCELADA")

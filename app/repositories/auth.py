@@ -1,5 +1,6 @@
 """Persistencia de usuarios, sesiones y auditoría de autenticación."""
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -167,13 +168,18 @@ class AuthRepository(BaseRepository):
         resource_id: str | None,
         detail: dict[str, Any] | None = None,
     ) -> None:
+        detail_payload = (
+            json.dumps(detail, ensure_ascii=False, default=str)
+            if detail is not None and not isinstance(detail, str)
+            else detail
+        )
         self.execute(
             """
             INSERT INTO auditoria
                 (id_usuario, actor_tipo, accion, recurso_tipo, recurso_id, detalle)
             VALUES (%s, %s, %s, %s, %s, %s)
             """,
-            (user_id, actor_type, action, resource_type, resource_id, detail),
+            (user_id, actor_type, action, resource_type, resource_id, detail_payload),
         )
 
 
