@@ -84,6 +84,27 @@ class CommandService(ProcedureService):
         codigo: int,
         descripcion: str,
     ) -> int:
+        # 1) Verificar que el vehículo exista usando el SP existente
+        _require_rows(self.fetch("sp_obtener_vehiculo", id_vehiculo))
+
+        # 2) Buscar comando existente por código o nombre normalizado
+        normalized_name = nombre.strip().upper()
+        existing_commands = self.list_for_vehicle(id_vehiculo)
+
+        matched = next(
+            (
+                cmd
+                for cmd in existing_commands
+                if int(cmd.get("codigo", -1)) == int(codigo)
+                or str(cmd.get("nombre", "")).strip().upper() == normalized_name
+            ),
+            None,
+        )
+
+        if matched is not None and matched.get("id_comando") is not None:
+            return int(matched["id_comando"])
+
+        # 3) Si no existe, crearlo con sp_crear_comando
         row = call_procedure_one(
             "sp_crear_comando",
             (id_vehiculo, nombre, codigo, descripcion),
@@ -102,6 +123,7 @@ class CommandService(ProcedureService):
                 status_code=500,
                 detail="El resultado de sp_crear_comando no contiene id_comando",
             )
+
         return int(id_comando)
 
     def list_for_vehicle(self, id_vehiculo: int) -> list[dict[str, Any]]:
@@ -158,7 +180,7 @@ class HistoryService(ProcedureService):
 
     def list(self, id_vehiculo: int, limit: int = 10) -> list[dict[str, Any]]:
         # El SP retorna DESC; el recorte conserva exactamente los 10 más recientes.
-        return _require_rows(self.fetch("sp_obtener_historial", id_vehiculo))[:limit]
+        return self.fetch("sp_obtener_historial", id_vehiculo)[:limit]
 
 
 class DemoService(ProcedureService):
@@ -166,7 +188,7 @@ class DemoService(ProcedureService):
         return self.execute("sp_crear_demo", id_vehiculo, nombre, descripcion)
 
     def list_for_vehicle(self, id_vehiculo: int) -> list[dict[str, Any]]:
-        return _require_rows(self.fetch("sp_obtener_demos", id_vehiculo))
+        return self.fetch("sp_obtener_demos", id_vehiculo)
 
     def update(
         self,
@@ -198,7 +220,7 @@ class DemoService(ProcedureService):
         )
 
     def list_movements(self, id_demo: int) -> list[dict[str, Any]]:
-        return _require_rows(self.fetch("sp_obtener_movimientos_demo", id_demo))
+        return self.fetch("sp_obtener_movimientos_demo", id_demo)
 
     def update_movement(
         self,

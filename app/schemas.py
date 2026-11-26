@@ -1,9 +1,9 @@
 """Modelos Pydantic v2 para los 21 stored procedures de la API."""
 
 from datetime import datetime
+import json
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field
-
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 class InputModel(BaseModel):
     """Configuración común para cuerpos de entrada de la API."""
@@ -338,6 +338,16 @@ class AuditoriaResponse(OutputModel):
     recurso_id: str | None = None
     detalle: dict | None = None
     creado_en: datetime
+
+    @field_validator("detalle", mode="before")
+    @classmethod
+    def parse_detalle(cls, value):
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return {"raw": value}
+        return value
 
 
 class DashboardResponse(BaseModel):

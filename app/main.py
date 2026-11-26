@@ -69,10 +69,10 @@ app.include_router(auth.router)
 
 
 @app.get("/", tags=["Health"])
+@app.get("/health", tags=["Health"])
 def health():
     """Verifica que el servidor está corriendo."""
     return {"status": "ok", "version": "2.1.0", "message": "IoT Car API lista"}
-
 
 @app.get(
     "/health/db",

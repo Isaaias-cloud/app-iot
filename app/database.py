@@ -58,7 +58,7 @@ def get_pool() -> pooling.MySQLConnectionPool:
     if _pool is None:
         _pool = pooling.MySQLConnectionPool(
             pool_name="iot_pool",
-            pool_size=5,
+            pool_size=20,
             host=DB_HOST,
             port=DB_PORT,
             user=DB_USER,
