@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Path
 
 from app.routers.hardware_ws import manager
+from app.routers.movimientos_config import cancel_movimiento
 from app.schemas import ComandoEnviar, ComandoResponseMovimiento, HistorialItem
 from app.services import HistoryService
 from app.repositories.auth import AccessRepository
@@ -49,10 +50,11 @@ async def enviar_comando(
     try:
         command = require_allowed_command(id_vehiculo, body.id_comando)
 
-        # El código 0 es DETENER: se publica la cancelación antes de iniciar
-        # cualquier otra operación de la secuencia DEMO.
+        # El código 0 es DETENER: cancela la demo y el auto-paro de un
+        # movimiento puntual antes de publicar el paro al hardware.
         if int(command["codigo"]) == 0:
             cancel_demo(id_vehiculo)
+            cancel_movimiento(id_vehiculo)
 
         await asyncio.to_thread(
             service.send_command_transactionally,
@@ -66,6 +68,8 @@ async def enviar_comando(
             "event": "nuevo_movimiento",
             "id_vehiculo": id_vehiculo,
             "id_comando": body.id_comando,
+            # El ESP8266 lee "codigo" del JSON; sin este campo ignora el comando.
+            "codigo": int(command["codigo"]),
             "conectado": body.conectado,
             "origen": body.origen,
             "timestamp": datetime.now(timezone.utc).isoformat(),

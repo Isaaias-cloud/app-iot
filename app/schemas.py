@@ -93,6 +93,46 @@ class ComandoResponse(OutputModel):
 class ComandoCreadoResponse(OutputModel):
     message: str
     id_comando: int
+    codigo: int | None = None
+    nombre: str | None = None
+
+
+# ── Movimientos puntuales (Etapa 9) ───────────────────────────────────────────
+
+class MovimientoCreate(InputModel):
+    id_comando: int = Field(..., gt=0)
+    nombre: str = Field(..., min_length=1, max_length=100)
+    duracion_ms: int = Field(..., ge=1, le=86_400_000)
+
+
+class MovimientoUpdate(InputModel):
+    nombre: str = Field(..., min_length=1, max_length=100)
+    duracion_ms: int = Field(..., ge=1, le=86_400_000)
+    activo: bool = True
+
+
+class MovimientoResponse(OutputModel):
+    id_movimiento: int
+    id_comando: int
+    nombre: str
+    duracion_ms: int
+    activo: bool
+    id_vehiculo: int | None = None
+    codigo: int | None = None
+    comando: str | None = None
+
+
+class MovimientoEjecutarRequest(InputModel):
+    id_movimiento: int = Field(..., gt=0)
+
+
+class MovimientoEjecucionResponse(OutputModel):
+    message: str
+    id_movimiento: int
+    id_vehiculo: int
+    id_comando: int
+    codigo: int
+    duracion_ms: int
 
 
 # ── Estado ────────────────────────────────────────────────────────────────────

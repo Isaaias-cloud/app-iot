@@ -20,6 +20,7 @@ from app.routers import (
     hardware_ws,
     guest,
     movimientos,
+    movimientos_config,
     me,
     owner_demos,
     vehiculos,
@@ -58,6 +59,7 @@ app.include_router(vehiculos.router)
 app.include_router(comandos.router)
 app.include_router(estado.router)
 app.include_router(movimientos.router)
+app.include_router(movimientos_config.router)
 app.include_router(demos.router)
 app.include_router(demo_execution.router)
 app.include_router(hardware_ws.router)

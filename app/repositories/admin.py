@@ -80,6 +80,32 @@ class AdminRepository(BaseRepository):
         )
         return count
 
+    def upsert_model_command(
+        self,
+        model_id: int,
+        command_id: int,
+        codigo: int,
+        nombre: str,
+        permitido: bool = True,
+    ) -> int:
+        """Da de alta (o actualiza) la capacidad de un comando para un modelo.
+
+        El endpoint legacy de PATCH se conserva; este metodo es aditivo y permite
+        que un comando recien creado sea ejecutable por el modelo de su unidad.
+        """
+        self.execute(
+            """
+            INSERT INTO modelo_comandos (id_modelo, id_comando, codigo, nombre, permitido)
+            VALUES (%s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                codigo = VALUES(codigo),
+                nombre = VALUES(nombre),
+                permitido = VALUES(permitido)
+            """,
+            (model_id, command_id, codigo, nombre, permitido),
+        )
+        return command_id
+
     def create_model(self, values: dict[str, Any]) -> int:
         last_id, _ = self.execute(
             """

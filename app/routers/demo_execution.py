@@ -37,6 +37,31 @@ def _db_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=500, detail=f"Error al ejecutar la demo: {exc}")
 
 
+async def _publish_demo_stop(
+    id_vehiculo: int,
+    id_demo: int,
+    stop_cmd: dict[str, Any] | None,
+) -> None:
+    """Publica DETENER (codigo=0) en pausas y al finalizar la secuencia."""
+    stop_id = int(stop_cmd["id_comando"]) if stop_cmd and stop_cmd.get("id_comando") else 0
+    stop_name = str(stop_cmd.get("nombre") or "DETENER") if stop_cmd else "DETENER"
+    stop_event = {
+        "event": "demo_stop",
+        "id_demo": id_demo,
+        "id_vehiculo": id_vehiculo,
+        "id_comando": stop_id,
+        "comando": stop_name,
+        "codigo": 0,
+        "conectado": True,
+        "origen": "DEMO",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    await manager.broadcast_to_devices(id_vehiculo, {**stop_event, "destino": "DISPOSITIVO"})
+    await manager.broadcast_to_clients(id_vehiculo, stop_event)
+    if stop_id > 0:
+        await asyncio.to_thread(state_service.update, id_vehiculo, stop_id, True)
+
+
 def _vehicle_id(body_id: int | None, movements: list[dict[str, Any]]) -> int:
     id_vehiculo = body_id
     if id_vehiculo is None:
@@ -123,6 +148,11 @@ async def ejecutar_demo(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="La demo contiene un comando no permitido para el modelo de la unidad",
                 )
+            if int(movimiento.get("codigo") or -1) == 7:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="El codigo 7 esta reservado para la demo local del dispositivo.",
+                )
             for key in ("id_vehiculo", "vehiculo_id"):
                 row_vehicle_id = movimiento.get(key)
                 if row_vehicle_id is not None and row_vehicle_id != id_vehiculo:
@@ -130,6 +160,10 @@ async def ejecutar_demo(
                         status_code=status.HTTP_409_CONFLICT,
                         detail="La demo contiene movimientos asociados a vehículos distintos",
                     )
+
+        stop_cmd = await asyncio.to_thread(
+            access_repository.command_by_code, id_vehiculo, 0
+        )
 
         total = len(movimientos)
         async with _vehicle_locks[id_vehiculo]:
@@ -196,6 +230,7 @@ async def ejecutar_demo(
                         pass
 
                     if index < total and movimiento["pausa_ms"] > 0:
+                        await _publish_demo_stop(id_vehiculo, body.id_demo, stop_cmd)
                         try:
                             await asyncio.wait_for(
                                 cancel_event.wait(), movimiento["pausa_ms"] / 1000
@@ -204,6 +239,10 @@ async def ejecutar_demo(
                             break
                         except asyncio.TimeoutError:
                             pass
+
+                # Al terminar todos los pasos sin cancelacion, detener el vehiculo.
+                if not cancelled and executed > 0:
+                    await _publish_demo_stop(id_vehiculo, body.id_demo, stop_cmd)
             finally:
                 if _active_demo_cancel_events.get(id_vehiculo) is cancel_event:
                     _active_demo_cancel_events.pop(id_vehiculo, None)

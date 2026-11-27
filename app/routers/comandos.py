@@ -9,7 +9,9 @@ from app.schemas import (
     ComandoUpdate,
     OperationResponse,
 )
+from app.repositories.admin import AdminRepository
 from app.services import CommandService
+from app.services_movimientos import validate_firmware_code
 from app.security import AuthContext, require_admin, require_vehicle_access
 
 
@@ -26,8 +28,32 @@ def _db_error(exc: Exception) -> HTTPException:
 @router.post("/", response_model=ComandoCreadoResponse, status_code=status.HTTP_201_CREATED, summary="Crear comando")
 def crear_comando(body: ComandoCreate, _context: AuthContext = Depends(require_admin)):
     try:
-        id_comando = service.create(body.id_vehiculo, body.nombre, body.codigo, body.descripcion)
-        return {"message": "Comando creado", "id_comando": id_comando}
+        codigo = validate_firmware_code(body.codigo)
+        id_comando = service.create(body.id_vehiculo, body.nombre, codigo, body.descripcion)
+        commands = service.list_for_vehicle(body.id_vehiculo)
+        created = next(
+            (command for command in commands if int(command.get("id_comando", -1)) == int(id_comando)),
+            None,
+        )
+        if created is None:
+            raise HTTPException(status_code=500, detail="El comando creado no pudo recuperarse")
+
+        repository = AdminRepository()
+        unit = repository.get_unit(body.id_vehiculo)
+        if unit is not None:
+            repository.upsert_model_command(
+                int(unit["id_modelo"]),
+                id_comando,
+                int(created["codigo"]),
+                str(created["nombre"]),
+                True,
+            )
+        return {
+            "message": "Comando creado",
+            "id_comando": id_comando,
+            "codigo": int(created["codigo"]),
+            "nombre": str(created["nombre"]),
+        }
     except Exception as exc:
         raise _db_error(exc) from exc
 
@@ -53,7 +79,7 @@ def actualizar_comando(
         service.update(
             id_comando,
             body.nombre,
-            body.codigo,
+            validate_firmware_code(body.codigo),
             body.descripcion,
             body.activo,
         )
